@@ -1,0 +1,23 @@
+# TruthLens - Multimodal Digital Forensics & Deepfake Video Detection
+# Core Dependencies
+fastapi
+uvicorn[standard]
+python-multipart
+pydantic
+pillow
+numpy
+opencv-python
+sqlalchemy
+reportlab
+python-dotenv
+
+# Audio & Text Forensics Module (Member 3)
+scipy
+soundfile
+imageio
+imageio-ffmpeg
+moviepy
+streamlit
+pandas
+altair
+openai-whisper

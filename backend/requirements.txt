@@ -8,3 +8,12 @@ opencv-python
 sqlalchemy
 reportlab
 python-dotenv
+scipy
+soundfile
+imageio
+imageio-ffmpeg
+moviepy
+streamlit
+pandas
+altair
+openai-whisper
