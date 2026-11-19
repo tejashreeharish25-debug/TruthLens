@@ -18,6 +18,9 @@ sys.path.insert(0, str(BASE_DIR / "backend"))
 
 from audio_forensics.service import analyze_audio
 from audio_forensics.extractor import load_audio_signal
+from analysis.correlation import correlate_results
+from analysis.confidence import calculate_confidence
+from reports.report_generator import create_pdf_report
 
 # Page Configuration
 st.set_page_config(
@@ -268,6 +271,16 @@ if "analysis_results" in st.session_state:
             chart_df = pd.DataFrame({"Time (s)": time_axis, "Normalized Amplitude": downsampled})
             st.line_chart(chart_df, x="Time (s)", y="Normalized Amplitude", height=180)
 
+            # Option to download the extracted standardized WAV
+            with open(res["extracted_audio_path"], "rb") as wav_f:
+                st.download_button(
+                    label="📥 Download Extracted Standardized WAV (16kHz Mono)",
+                    data=wav_f.read(),
+                    file_name=Path(res["extracted_audio_path"]).name,
+                    mime="audio/wav",
+                    help="Extracted 16-bit PCM uncompressed WAV suitable for forensic audio engineering."
+                )
+
         ac_features = res.get("acoustic_analysis", {}).get("acoustic_features", {})
         pitch_stats = res.get("acoustic_analysis", {}).get("pitch_statistics", {})
         
@@ -314,7 +327,31 @@ if "analysis_results" in st.session_state:
         st.subheader("Speech-to-Text Transcript")
         transcript_text = res.get("transcript", "")
         if transcript_text:
-            st.text_area("Extracted Transcript (Whisper Engine)", value=transcript_text, height=120)
+            st.text_area("Raw Extracted Transcript (Whisper Engine)", value=transcript_text, height=100)
+            
+            # Highlight suspicious words and phrases visually
+            txt_forensics = res.get("text_forensics", {})
+            suspicious_phrases = txt_forensics.get("suspicious_phrases", [])
+            suspicious_words = txt_forensics.get("suspicious_words", [])
+
+            if suspicious_phrases or suspicious_words:
+                st.markdown("#### 🔍 Flagged Content Highlights")
+                highlighted_html = transcript_text
+                import re
+                for phrase in suspicious_phrases:
+                    pattern = re.compile(re.escape(phrase), re.IGNORECASE)
+                    highlighted_html = pattern.sub(
+                        f"<mark style='background-color:#ffebee; color:#b71c1c; font-weight:bold; padding:2px 6px; border-radius:4px; border:1px solid #ef5350;'>{phrase}</mark>",
+                        highlighted_html
+                    )
+                for word in suspicious_words:
+                    pattern = re.compile(rf"\b{re.escape(word)}\b", re.IGNORECASE)
+                    highlighted_html = pattern.sub(
+                        f"<mark style='background-color:#fff3e0; color:#e65100; font-weight:bold; padding:2px 4px; border-radius:3px;'>{word}</mark>",
+                        highlighted_html
+                    )
+                st.markdown(f'<div style="background-color:#1e222d; padding:16px; border-radius:8px; border-left:4px solid #ef5350;">{highlighted_html}</div>', unsafe_allow_html=True)
+                st.caption("🔴 Red highlights: AI marker phrases / trigger keywords. 🟠 Orange highlights: Repetitive word loops.")
         else:
             st.info("No verbal speech transcribed from audio.")
 
@@ -354,15 +391,57 @@ if "analysis_results" in st.session_state:
         
         st.json(integration_payload)
         
-        # Download button
-        json_report = json.dumps(res, indent=2)
-        st.download_button(
-            label="📥 Download Complete Forensic JSON Report",
-            data=json_report,
-            file_name=f"truthlens_audio_forensics_{Path(file_to_analyze).stem}.json",
-            mime="application/json",
-            use_container_width=True
-        )
+        # Download buttons row
+        col_dl1, col_dl2 = st.columns(2)
+        with col_dl1:
+            json_report = json.dumps(res, indent=2)
+            st.download_button(
+                label="📥 Download Complete Forensic JSON Report",
+                data=json_report,
+                file_name=f"truthlens_audio_forensics_{Path(file_to_analyze).stem}.json",
+                mime="application/json",
+                use_container_width=True
+            )
+
+        with col_dl2:
+            # Generate official TruthLens PDF report using teammate's report_generator
+            try:
+                corr = correlate_results(
+                    image=None,
+                    video=None,
+                    audio={
+                        "status": "completed",
+                        "manipulation_score": res["manipulation_score"],
+                        "confidence": res["confidence"],
+                        "findings": res["findings"]
+                    },
+                    text={
+                        "status": "completed",
+                        "manipulation_score": res.get("text_forensics", {}).get("text_manipulation_score", 0.1),
+                        "confidence": res["confidence"],
+                        "findings": res.get("text_forensics", {}).get("findings", [])
+                    }
+                )
+                conf = calculate_confidence({
+                    "image": None,
+                    "video": None,
+                    "audio": {"status": "completed", "confidence": res["confidence"]},
+                    "text": {"status": "completed", "confidence": res["confidence"]}
+                })
+                pdf_output_path = Path(tempfile.gettempdir()) / f"truthlens_report_{Path(file_to_analyze).stem}.pdf"
+                create_pdf_report(corr, conf, output_path=pdf_output_path)
+                
+                if pdf_output_path.exists():
+                    with open(pdf_output_path, "rb") as pdf_f:
+                        st.download_button(
+                            label="📄 Download Official PDF Forensic Report",
+                            data=pdf_f.read(),
+                            file_name=f"truthlens_forensic_report_{Path(file_to_analyze).stem}.pdf",
+                            mime="application/pdf",
+                            use_container_width=True
+                        )
+            except Exception as pdf_err:
+                st.warning(f"PDF generator notice: {pdf_err}")
 
 st.markdown("---")
 st.caption("TruthLens Deepfake Video Detection System • Hackathon Deliverable — Member 3 (Audio and Text Forensics)")

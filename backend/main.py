@@ -183,3 +183,22 @@ async def analyze_media(payload: dict = Body(...)):
         return {
             "error": str(error)
         }
+
+
+@app.get("/report/download")
+def download_latest_report():
+    """
+    Download the most recently generated TruthLens PDF forensic report.
+    """
+    report_file = BASE_DIR / "reports" / "truthlens_report.pdf"
+    if not report_file.exists():
+        raise HTTPException(
+            status_code=404,
+            detail="No report generated yet. Run an analysis first."
+        )
+    return FileResponse(
+        path=str(report_file),
+        filename="truthlens_forensic_report.pdf",
+        media_type="application/pdf"
+    )
+
