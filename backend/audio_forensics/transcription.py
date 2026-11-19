@@ -4,9 +4,31 @@ Extracts verbatim speech transcripts with start/end segment timestamps using Whi
 Includes defensive CPU-friendly fallbacks to ensure zero failure on constrained environments.
 """
 
+import os
+import shutil
 from pathlib import Path
 import numpy as np
 
+
+def _ensure_ffmpeg_in_path():
+    """Ensure ffmpeg executable is present in PATH for Whisper on Windows."""
+    if shutil.which("ffmpeg") is not None:
+        return
+    try:
+        import imageio_ffmpeg
+        ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+        bin_dir = os.path.dirname(ffmpeg_exe)
+        alias = os.path.join(bin_dir, "ffmpeg.exe" if os.name == "nt" else "ffmpeg")
+        if not os.path.exists(alias):
+            shutil.copyfile(ffmpeg_exe, alias)
+        if bin_dir not in os.environ.get("PATH", ""):
+            os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
+    except Exception:
+        pass
+
+
+# Register ffmpeg in PATH at module load time
+_ensure_ffmpeg_in_path()
 
 _WHISPER_MODEL = None
 
