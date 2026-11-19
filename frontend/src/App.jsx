@@ -8,9 +8,9 @@ function App() {
   const [result, setResult] = useState(null)
 
   const mediaOptions = [
-    { id: 'image', name: 'Image Analysis', accept: 'image/*', icon: '🖼️' },
-    { id: 'video', name: 'Video Analysis', accept: 'video/*', icon: '🎬' },
-    { id: 'audio', name: 'Audio Analysis', accept: 'audio/*', icon: '🎧' }
+    { id: 'image', name: 'Image Analysis', accept: 'image/*', icon: '\u{1F5BC}\u{FE0F}' },
+    { id: 'video', name: 'Video Analysis', accept: 'video/*', icon: '\u{1F3AC}' },
+    { id: 'audio', name: 'Audio Analysis', accept: 'audio/*', icon: '\u{1F3A7}' }
   ]
 
   const selectedOption = mediaOptions.find(
@@ -22,20 +22,51 @@ function App() {
     setResult(null)
   }
 
-  function handleAnalyze() {
+  async function handleAnalyze() {
     if (!file) return
 
     setLoading(true)
     setResult(null)
 
-    setTimeout(() => {
-      setLoading(false)
-      setResult({
-        status: 'Demo analysis complete',
-        confidence: 94.5,
-        explanation: 'This is a simulated result for frontend testing. No actual AI detection has been performed.'
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+
+      const uploadResponse = await fetch(`/upload/${mediaType}`, {
+        method: 'POST',
+        body: formData
       })
-    }, 2500)
+
+      if (!uploadResponse.ok) {
+        const errorData = await uploadResponse.json()
+        throw new Error(errorData.detail || 'File upload failed')
+      }
+
+      const uploadData = await uploadResponse.json()
+
+      const analyzeResponse = await fetch('/analyze', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          [mediaType]: uploadData.filename
+        })
+      })
+
+      if (!analyzeResponse.ok) {
+        const errorData = await analyzeResponse.json()
+        throw new Error(errorData.detail || 'Media analysis failed')
+      }
+
+      const analysisData = await analyzeResponse.json()
+      setResult(analysisData)
+
+    } catch (error) {
+      alert(error.message)
+    } finally {
+      setLoading(false)
+    }
   }
 
   return (
@@ -84,7 +115,7 @@ function App() {
           <p>Selected mode: {selectedOption.name}</p>
 
           <label className="file-upload">
-            <span>＋</span>
+            <span>{'\u{2B06}'}</span>
             <strong>Choose a {mediaType} file</strong>
             <small>Supported formats depend on your browser</small>
 
@@ -105,7 +136,7 @@ function App() {
                 onClick={handleAnalyze}
                 disabled={loading}
               >
-                {loading ? 'Analyzing...' : 'Analyze Media →'}
+                {loading ? 'Analyzing...' : `Analyze Media ${'\u{2192}'}`}
               </button>
             </div>
           )}
@@ -114,18 +145,35 @@ function App() {
             <div className="loading-panel">
               <div className="loader"></div>
               <h3>Analyzing your media...</h3>
-              <p>Please wait while the demo runs.</p>
+              <p>Please wait while the analysis runs.</p>
             </div>
           )}
 
           {result && (
             <div className="result-panel">
-              <p className="tagline">DEMO RESULT — NOT AI VERIFIED</p>
-              <h2>{result.status}</h2>
-              <div className="confidence">
-                {result.confidence}%
-              </div>
-              <p>{result.explanation}</p>
+              <p className="tagline">TRUTHLENS ANALYSIS REPORT</p>
+              <h2>Analysis Complete</h2>
+
+              {result.image?.ai_generated_score != null ? (
+                <>
+                  <div className="confidence">
+                    {(result.image.ai_generated_score * 100).toFixed(2)}%
+                  </div>
+                  <p>AI-generated score</p>
+                </>
+              ) : (
+                <p>
+                  Analysis completed. An AI-generated image score
+                  is not available for this media type.
+                </p>
+              )}
+
+              <button
+                className="analyze-btn"
+                onClick={() => window.open('/report/download', '_blank')}
+              >
+                Download Report {'\u{2193}'}
+              </button>
             </div>
           )}
         </section>

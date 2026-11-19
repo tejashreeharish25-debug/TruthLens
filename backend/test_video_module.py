@@ -1,36 +1,60 @@
 
-import json
-from pathlib import Path
+import cv2
+import numpy as np
+
 from video_analysis import analyze_video
 
-# Folder containing sample videos
-sample_folder = Path("sample_videos")
 
-supported_formats = [".mp4", ".avi", ".mov", ".mkv"]
+def create_test_video():
+    output_path = "test_sample_video.mp4"
 
-if not sample_folder.exists():
-    print("sample_videos folder not found")
+    writer = cv2.VideoWriter(
+        output_path,
+        cv2.VideoWriter_fourcc(*"mp4v"),
+        5.0,
+        (100, 80)
+    )
 
-else:
-    video_files = [
-        file for file in sample_folder.iterdir()
-        if file.suffix.lower() in supported_formats
-    ]
+    if not writer.isOpened():
+        raise RuntimeError("Could not create test video")
 
-    if not video_files:
-        print("No sample video found in sample_videos folder")
+    try:
+        for i in range(5):
+            frame = np.zeros((80, 100, 3), dtype=np.uint8)
+            frame[:] = (i * 30, 100, 150)
+            writer.write(frame)
+    finally:
+        writer.release()
 
-    else:
-        sample_video = video_files[0]
+    with open(output_path, "rb") as file:
+        video_bytes = file.read()
 
-        print("Testing video:", sample_video.name)
+    import os
+    os.remove(output_path)
 
-        video_bytes = sample_video.read_bytes()
+    return video_bytes
 
-        result = analyze_video(
-            video_bytes,
-            filename=sample_video.name
-        )
 
-        print("\nVideo Analysis Result:")
-        print(json.dumps(result, indent=4))
+def test_analyze_video_success():
+    video_bytes = create_test_video()
+
+    result = analyze_video(
+        video_bytes,
+        filename="test_video.mp4"
+    )
+
+    assert result["modality"] == "video"
+    assert result["status"] == "completed"
+    assert result["video_info"]["filename"] == "test_video.mp4"
+    assert result["video_info"]["width"] == 100
+    assert result["video_info"]["height"] == 80
+    assert result["video_info"]["total_frames"] == 5
+    assert len(result["video_info"]["sampled_frames"]) > 0
+
+
+def test_analyze_video_invalid_file():
+    result = analyze_video(b"not a valid video")
+
+    assert result["modality"] == "video"
+    assert result["status"] == "error"
+    assert len(result["findings"]) > 0

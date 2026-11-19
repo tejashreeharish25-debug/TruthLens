@@ -1,43 +1,67 @@
 
-from fastapi import Body
+from pathlib import Path
+from uuid import uuid4
+
+from fastapi import FastAPI, UploadFile, File, HTTPException, Body
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+
+from image_analysis import analyze_image
+from video_analysis import analyze_video
+from audio_forensics.service import analyze_audio
 from analysis.correlation import correlate_results
 from analysis.confidence import calculate_confidence
 from reports.report_generator import create_pdf_report
-from audio_forensics.service import analyze_audio
-from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pathlib import Path
-from uuid import uuid4
-import shutil
 
-# Create application
+
 app = FastAPI(
     title="TruthLens API",
     description="Multimodal Digital Forensics and Deepfake Detection System",
     version="1.0.0"
 )
 
-# Enable frontend connection
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Restrict this before production
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Project directories
 BASE_DIR = Path(__file__).resolve().parent.parent
 UPLOAD_DIR = BASE_DIR / "uploads"
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+REPORT_DIR = BASE_DIR / "reports"
 
-# Supported media formats
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+REPORT_DIR.mkdir(parents=True, exist_ok=True)
+
 ALLOWED_TYPES = {
     "image": {".jpg", ".jpeg", ".png", ".webp"},
     "video": {".mp4", ".avi", ".mov", ".mkv"},
     "audio": {".mp3", ".wav", ".m4a", ".ogg"}
 }
+
+
+def get_uploaded_file(filename, media_type):
+    """Validate and locate a previously uploaded file."""
+
+    if not isinstance(filename, str) or Path(filename).name != filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+
+    file_path = UPLOAD_DIR / filename
+
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail=f"File not found: {filename}")
+
+    extension = file_path.suffix.lower()
+
+    if extension not in ALLOWED_TYPES[media_type]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported {media_type} file format"
+        )
+
+    return file_path
 
 
 @app.get("/")
@@ -57,148 +81,179 @@ def health_check():
 
 
 @app.post("/upload/{media_type}")
-def upload_file(
-    media_type: str,
-    file: UploadFile = File(...)
-):
+async def upload_file(media_type: str, file: UploadFile = File(...)):
     if media_type not in ALLOWED_TYPES:
-        raise HTTPException(
-            status_code=400,
-            detail="Media type must be image, video or audio"
-        )
+        raise HTTPException(status_code=400, detail="Invalid media type")
 
     extension = Path(file.filename or "").suffix.lower()
 
     if extension not in ALLOWED_TYPES[media_type]:
         raise HTTPException(
             status_code=400,
-            detail="Unsupported file format"
+            detail=f"Unsupported {media_type} file format"
         )
 
-    safe_filename = f"{uuid4().hex}{extension}"
-    save_path = UPLOAD_DIR / safe_filename
+    filename = f"{uuid4().hex}{extension}"
+    save_path = UPLOAD_DIR / filename
 
     try:
-        with save_path.open("wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-    except Exception:
-        if save_path.exists():
-            save_path.unlink()
-        raise HTTPException(
-            status_code=500,
-            detail="File upload failed"
-        )
-    finally:
-        file.file.close()
+        contents = await file.read()
 
-    return {
-        "message": "File uploaded successfully",
-        "filename": safe_filename,
-        "media_type": media_type,
-        "status": "uploaded"
-    }
+        if not contents:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+        save_path.write_bytes(contents)
+
+        return {
+            "message": "File uploaded successfully",
+            "filename": filename,
+            "media_type": media_type,
+            "status": "uploaded"
+        }
+
+    finally:
+        await file.close()
+
 
 @app.post("/analyze/audio")
 async def analyze_audio_upload(file: UploadFile = File(...)):
-    """
-    Direct forensic analysis for uploaded video or audio file.
-    Extracts audio, transcribes speech, evaluates synthetic voice markers,
-    and returns timestamped anomalies.
-    """
     extension = Path(file.filename or "").suffix.lower()
-    allowed_audio_video = ALLOWED_TYPES["video"] | ALLOWED_TYPES["audio"]
+
+    allowed_audio_video = ALLOWED_TYPES["audio"] | ALLOWED_TYPES["video"]
+
     if extension not in allowed_audio_video:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported format. Allowed: {allowed_audio_video}"
+            detail="Unsupported audio or video format"
         )
 
-    safe_filename = f"{uuid4().hex}{extension}"
-    save_path = UPLOAD_DIR / safe_filename
+    filename = f"{uuid4().hex}{extension}"
+    save_path = UPLOAD_DIR / filename
 
     try:
-        with save_path.open("wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-            
-        forensic_result = analyze_audio(save_path)
+        contents = await file.read()
+
+        if not contents:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+        save_path.write_bytes(contents)
+        result = analyze_audio(save_path)
+
         return {
-            "message": "Audio forensics completed successfully",
-            "filename": safe_filename,
-            "forensics": forensic_result
+            "message": "Audio analysis completed",
+            "filename": filename,
+            "forensics": result
         }
+
+    except HTTPException:
+        raise
     except Exception as error:
         raise HTTPException(status_code=500, detail=str(error))
     finally:
-        file.file.close()
+        await file.close()
 
 
 @app.post("/analyze")
 async def analyze_media(payload: dict = Body(...)):
     try:
-        image = payload.get("image")
-        video = payload.get("video")
-        audio = payload.get("audio")
-        text = payload.get("text")
+        image_result = None
+        video_result = None
+        audio_result = None
+        text_result = None
 
-        # Automatically execute audio forensics if audio is a filename or path
-        if isinstance(audio, str) and (UPLOAD_DIR / audio).exists():
-            audio = analyze_audio(UPLOAD_DIR / audio)
-        elif isinstance(video, str) and audio is None and (UPLOAD_DIR / video).exists():
-            # If video is provided and no audio detector result was supplied, run audio forensics on video
-            try:
-                audio = analyze_audio(UPLOAD_DIR / video)
-            except Exception:
-                pass
+        # IMAGE ANALYSIS
+        image_filename = payload.get("image")
 
-        # Cross-modal correlation
+        if image_filename:
+            image_path = get_uploaded_file(image_filename, "image")
+            image_result = analyze_image(image_path.read_bytes())
+
+        # VIDEO ANALYSIS
+        video_filename = payload.get("video")
+
+        if video_filename:
+            video_path = get_uploaded_file(video_filename, "video")
+            video_result = analyze_video(
+                video_path.read_bytes(),
+                filename=video_filename
+            )
+
+        # AUDIO ANALYSIS
+        audio_filename = payload.get("audio")
+
+        if audio_filename:
+            audio_path = get_uploaded_file(audio_filename, "audio")
+            audio_result = analyze_audio(audio_path)
+
+        # OPTIONAL TEXT / TRANSCRIPT CONTEXT
+        supplied_text = payload.get("text")
+
+        if supplied_text is not None:
+            if not isinstance(supplied_text, str):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Text input must be a string"
+                )
+
+            text_result = {
+                "modality": "text",
+                "status": "completed",
+                "manipulation_score": None,
+                "confidence": None,
+                "findings": [
+                    "Text supplied as contextual evidence",
+                    f"Text length: {len(supplied_text)} characters"
+                ]
+            }
+
+        # CROSS-MODAL CORRELATION
         correlation = correlate_results(
-            image=image,
-            video=video,
-            audio=audio,
-            text=text
+            image=image_result,
+            video=video_result,
+            audio=audio_result,
+            text=text_result
         )
 
-        # Confidence analysis
+        # CONFIDENCE SUMMARY
         confidence = calculate_confidence({
-            "image": image,
-            "video": video,
-            "audio": audio,
-            "text": text
+            "image": image_result,
+            "video": video_result,
+            "audio": audio_result,
+            "text": text_result
         })
 
-        # Generate PDF
-        pdf_path = create_pdf_report(
-            correlation,
-            confidence
-        )
+        # GENERATE PDF REPORT
+        pdf_path = create_pdf_report(correlation, confidence)
 
         return {
             "message": "Analysis completed successfully",
+            "image": image_result,
+            "video": video_result,
+            "audio": audio_result,
+            "text": text_result,
             "correlation": correlation,
             "confidence": confidence,
-            "report_path": pdf_path
+            "report_path": str(pdf_path)
         }
 
+    except HTTPException:
+        raise
     except Exception as error:
-        return {
-            "error": str(error)
-        }
+        raise HTTPException(status_code=500, detail=str(error))
 
 
 @app.get("/report/download")
 def download_latest_report():
-    """
-    Download the most recently generated TruthLens PDF forensic report.
-    """
-    report_file = BASE_DIR / "reports" / "truthlens_report.pdf"
-    if not report_file.exists():
+    report_path = REPORT_DIR / "truthlens_report.pdf"
+
+    if not report_path.is_file():
         raise HTTPException(
             status_code=404,
-            detail="No report generated yet. Run an analysis first."
+            detail="No report is available yet. Run an analysis first."
         )
-    return FileResponse(
-        path=str(report_file),
-        filename="truthlens_forensic_report.pdf",
-        media_type="application/pdf"
-    )
 
+    return FileResponse(
+        path=report_path,
+        media_type="application/pdf",
+        filename="truthlens_report.pdf"
+    )

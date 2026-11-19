@@ -29,7 +29,6 @@ def correlate_results(image=None, video=None, audio=None, text=None):
 
     findings = []
 
-    # Collect indicators from available detectors
     for modality, result in available.items():
         for indicator in result.get("findings", []):
             findings.append({
@@ -37,8 +36,8 @@ def correlate_results(image=None, video=None, audio=None, text=None):
                 "indicator": indicator
             })
 
-    # Compare detector findings
     suspicious = []
+
     for modality, result in available.items():
         score = result.get("manipulation_score")
 

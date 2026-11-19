@@ -1,32 +1,39 @@
-import json
-from pathlib import Path
+
+from io import BytesIO
+from PIL import Image
+
 from image_analysis import analyze_image
 
-# Find sample images
-sample_folder = Path("sample_images")
 
-supported_formats = [".jpg", ".jpeg", ".png", ".webp"]
+def create_test_image():
+    buffer = BytesIO()
 
-if not sample_folder.exists():
-    print("sample_images folder not found")
+    image = Image.new("RGB", (100, 80), color="blue")
+    image.save(buffer, format="PNG")
 
-else:
-    image_files = [
-        file for file in sample_folder.iterdir()
-        if file.suffix.lower() in supported_formats
-    ]
+    return buffer.getvalue()
 
-    if not image_files:
-        print("No sample image found in sample_images folder")
 
-    else:
-        sample_image = image_files[0]
+def test_analyze_image_success():
+    image_bytes = create_test_image()
 
-        print("Testing image:", sample_image.name)
+    result = analyze_image(image_bytes)
 
-        image_bytes = sample_image.read_bytes()
+    assert result["modality"] == "image"
+    assert result["status"] == "completed"
+    assert result["image_info"]["width"] == 100
+    assert result["image_info"]["height"] == 80
+    assert result["image_info"]["format"] == "PNG"
+    assert result["image_info"]["file_size_bytes"] == len(image_bytes)
+    assert "Image successfully loaded" in result["findings"]
 
-        result = analyze_image(image_bytes)
 
-        print("\nImage Analysis Result:")
-        print(json.dumps(result, indent=4))
+def test_analyze_image_invalid_file():
+    result = analyze_image(b"this is not a valid image")
+
+    assert result["modality"] == "image"
+    assert result["status"] == "error"
+    assert any(
+        "Image analysis failed" in finding
+        for finding in result["findings"]
+    )
